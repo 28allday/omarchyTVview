@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Open a window showing the TV's screen. Runs until the window closes.
+#
+# The address comes from, in order:
+#   1. $XDG_CONFIG_HOME/omarchytvview/address (host or host:port)
+#   2. the TV paired with OmarchyTV (only its address is read, never its token)
+#
+# Lines starting "omarchytvview: " on stderr are shown to the user by Service.qml.
+set -u
+
+readonly DEFAULT_ADB_PORT=5555
+readonly CONNECT_TIMEOUT=10
+readonly ADDRESS_MAX_BYTES=300
+readonly ADDRESS_MAX_LENGTH=259 # a 253-character host name, then :65535
+readonly PAIRING_MAX_BYTES=65536
+
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+state_home="${XDG_STATE_HOME:-$HOME/.local/state}"
+address_file="$config_home/omarchytvview/address"
+pairing_file="$state_home/omarchy-link/pairing.json"
+
+fail() {
+  printf 'omarchytvview: %s\n' "$1" >&2
+  exit 3
+}
+
+# -f, not -r: reading a pipe left at one of these paths would wait forever.
+# Every read has a size limit, because both files can be replaced by anything.
+find_address() {
+  local address=""
+  if [[ -f $address_file && -r $address_file ]]; then
+    IFS=$' \t\r' read -r address _ < <(head -c "$ADDRESS_MAX_BYTES" "$address_file") || true
+  fi
+  if [[ -z $address && -f $pairing_file && -r $pairing_file ]] && command -v jq > /dev/null; then
+    address=$(head -c "$PAIRING_MAX_BYTES" "$pairing_file" | jq -r '.tv.address // empty' 2> /dev/null)
+  fi
+  printf '%s' "$address"
+}
+
+# scrcpy depends on android-tools, the package that provides adb, so this one
+# command is right whichever of the two is missing.
+for tool in adb scrcpy; do
+  command -v "$tool" > /dev/null \
+    || fail "$tool is not installed. Install it with: sudo pacman -S scrcpy"
+done
+
+address=$(find_address)
+[[ -n $address ]] \
+  || fail "No TV found. Pair one with OmarchyTV, or put its address in $address_file"
+# It ends up as an argument to adb and scrcpy, so it must not look like an option.
+# The length check stops a read cut short by the size limit being taken for an address.
+((${#address} <= ADDRESS_MAX_LENGTH)) && [[ $address =~ ^[A-Za-z0-9][A-Za-z0-9.:-]*$ ]] \
+  || fail "That TV address doesn't look right. Check $address_file"
+[[ $address == *:* ]] || address="$address:$DEFAULT_ADB_PORT"
+
+timeout "$CONNECT_TIMEOUT" adb connect "$address" > /dev/null 2>&1
+state=$(timeout "$CONNECT_TIMEOUT" adb -s "$address" get-state 2>&1)
+case "$state" in
+  device) ;;
+  *unauthorized*)
+    fail "The TV hasn't allowed this PC yet. Accept the prompt on the TV, then try again."
+    ;;
+  *)
+    fail "Can't reach the TV at $address. Is it on, with network debugging turned on?"
+    ;;
+esac
+
+# Keep the sound playing on the TV as well as here. That needs Android 13 (API 33);
+# on anything older scrcpy picks what it can on its own.
+args=(--serial="$address")
+sdk=$(timeout "$CONNECT_TIMEOUT" adb -s "$address" shell getprop ro.build.version.sdk 2> /dev/null | tr -d '\r')
+if [[ $sdk =~ ^[0-9]+$ ]] && ((sdk >= 33)); then
+  args+=(--audio-dup)
+fi
+
+exec scrcpy "${args[@]}"

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "nosignal.omarchytvview",
+  "name": "omarchyTVview",
+  "version": "0.1.0",
+  "author": "Gavin Nugent",
+  "license": "MIT",
+  "homepage": "https://github.com/28allday/omarchyTVview",
+  "description": "Show your Android TV's screen in a window on this PC and drive it with your mouse and keyboard. Click the bar icon to open it and click again to close it. Uses scrcpy over network debugging, and finds the TV from your OmarchyTV pairing.",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "omarchyTVview",
+    "description": "Open or close a window showing the TV's screen.",
+    "category": "Media",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}
